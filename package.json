@@ -1,0 +1,49 @@
+{
+  "name": "r-open-db",
+  "version": "0.1.0",
+  "description": "Lightweight Supabase-style query API for any Postgres",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./migrate": {
+      "types": "./dist/migrate/index.d.ts",
+      "import": "./dist/migrate/index.js",
+      "require": "./dist/migrate/index.cjs"
+    }
+  },
+  "bin": {
+    "r-open-db": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "postgres",
+    "supabase",
+    "query-builder",
+    "database",
+    "migrations"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
