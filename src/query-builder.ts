@@ -1,18 +1,23 @@
 import type { Sql } from 'postgres'
 import type { Filter, FilterOperator, OrderClause } from './filters.js'
 import { type QueryOperation, type QueryState, buildQuery } from './sql-builder.js'
+import { type SchemaCache, hasRelationSyntax } from './relations.js'
 
 export interface QueryResult<T = Record<string, unknown>> {
   data: T[] | null
   error: Error | null
 }
 
+type GetSchema = () => Promise<SchemaCache>
+
 export class QueryBuilder<T = Record<string, unknown>> {
   private sql: Sql
   private state: QueryState
+  private getSchema?: GetSchema
 
-  constructor(sql: Sql, table: string, schema: string) {
+  constructor(sql: Sql, table: string, schema: string, getSchema?: GetSchema) {
     this.sql = sql
+    this.getSchema = getSchema
     this.state = {
       table,
       operation: 'select',
@@ -29,7 +34,7 @@ export class QueryBuilder<T = Record<string, unknown>> {
   }
 
   private clone(): QueryBuilder<T> {
-    const qb = new QueryBuilder<T>(this.sql, this.state.table, this.state.schema)
+    const qb = new QueryBuilder<T>(this.sql, this.state.table, this.state.schema, this.getSchema)
     qb.state = {
       ...this.state,
       filters: [...this.state.filters],
@@ -171,7 +176,18 @@ export class QueryBuilder<T = Record<string, unknown>> {
 
   private async execute(): Promise<QueryResult<T>> {
     try {
-      const { text, values } = buildQuery(this.state)
+      let schemaCache: SchemaCache | undefined
+      if (
+        this.state.operation === 'select' &&
+        this.state.columns &&
+        hasRelationSyntax(this.state.columns)
+      ) {
+        if (!this.getSchema) {
+          throw new Error('Relation queries require a client-bound QueryBuilder')
+        }
+        schemaCache = await this.getSchema()
+      }
+      const { text, values } = buildQuery(this.state, schemaCache)
       const result = await this.sql.unsafe(text, values as any[])
       return { data: result as unknown as T[], error: null }
     } catch (err) {

@@ -18,8 +18,11 @@ export interface OrderClause {
 export function filterToSql(
   filter: Filter,
   paramIndex: number,
+  qualifyAlias?: string,
 ): { sql: string; values: unknown[] } {
-  const col = quoteIdent(filter.column)
+  const col = qualifyAlias
+    ? `${qualifyAlias}.${quoteIdent(filter.column)}`
+    : quoteIdent(filter.column)
 
   switch (filter.operator) {
     case 'eq':

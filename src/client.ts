@@ -13,6 +13,7 @@ export class ROpenDbClient {
   private sql: Sql
   private schema: string
   private schemaCache: SchemaCache | null = null
+  private schemaPromise: Promise<SchemaCache> | null = null
 
   constructor(opts: ClientOptions) {
     this.schema = opts.schema || 'public'
@@ -23,14 +24,18 @@ export class ROpenDbClient {
   }
 
   from<T = Record<string, unknown>>(table: string): QueryBuilder<T> {
-    return new QueryBuilder<T>(this.sql, table, this.schema)
+    return new QueryBuilder<T>(this.sql, table, this.schema, () => this.introspect())
   }
 
   async introspect(): Promise<SchemaCache> {
-    if (!this.schemaCache) {
-      this.schemaCache = await introspectSchema(this.sql, this.schema)
+    if (this.schemaCache) return this.schemaCache
+    if (!this.schemaPromise) {
+      this.schemaPromise = introspectSchema(this.sql, this.schema).then(cache => {
+        this.schemaCache = cache
+        return cache
+      })
     }
-    return this.schemaCache
+    return this.schemaPromise
   }
 
   /** Access the underlying postgres driver for raw queries */

@@ -1,4 +1,10 @@
 import { type Filter, type OrderClause, filterToSql, quoteIdent } from './filters.js'
+import {
+  type SchemaCache,
+  buildRelationSelect,
+  hasRelationSyntax,
+  parseSelectColumns,
+} from './relations.js'
 
 export type QueryOperation = 'select' | 'insert' | 'update' | 'delete' | 'upsert'
 
@@ -21,10 +27,10 @@ export interface BuiltQuery {
   values: unknown[]
 }
 
-export function buildQuery(state: QueryState): BuiltQuery {
+export function buildQuery(state: QueryState, schemaCache?: SchemaCache): BuiltQuery {
   switch (state.operation) {
     case 'select':
-      return buildSelect(state)
+      return buildSelect(state, schemaCache)
     case 'insert':
       return buildInsert(state)
     case 'update':
@@ -36,11 +42,18 @@ export function buildQuery(state: QueryState): BuiltQuery {
   }
 }
 
-function buildSelect(state: QueryState): BuiltQuery {
-  const values: unknown[] = []
-  const table = qualifiedTable(state)
+function buildSelect(state: QueryState, schemaCache?: SchemaCache): BuiltQuery {
   const cols = state.columns || '*'
 
+  if (hasRelationSyntax(cols)) {
+    if (!schemaCache) {
+      throw new Error('Schema cache required for relation queries')
+    }
+    return buildSelectWithRelations(state, cols, schemaCache)
+  }
+
+  const values: unknown[] = []
+  const table = qualifiedTable(state)
   let text = `SELECT ${cols} FROM ${table}`
 
   const whereClause = buildWhere(state.filters, values)
@@ -49,6 +62,47 @@ function buildSelect(state: QueryState): BuiltQuery {
   if (state.orderClauses.length > 0) {
     const orders = state.orderClauses.map(
       o => `${quoteIdent(o.column)} ${o.ascending ? 'ASC' : 'DESC'}`
+    )
+    text += ` ORDER BY ${orders.join(', ')}`
+  }
+
+  if (state.limitCount !== null) {
+    text += ` LIMIT ${state.limitCount}`
+  }
+
+  if (state.offsetCount !== null) {
+    text += ` OFFSET ${state.offsetCount}`
+  }
+
+  return { text, values }
+}
+
+function buildSelectWithRelations(
+  state: QueryState,
+  cols: string,
+  cache: SchemaCache,
+): BuiltQuery {
+  const parsed = parseSelectColumns(cols)
+  const relSelect = buildRelationSelect(state.table, state.schema, parsed, cache, 1)
+
+  const localAlias = relSelect.localAlias
+  const fromTable = qualifiedTable(state)
+  const values: unknown[] = [...relSelect.values]
+
+  let text =
+    `SELECT ${relSelect.selectClause} ` +
+    `FROM ${fromTable} AS ${localAlias}`
+
+  if (relSelect.joinClause) {
+    text += ` ${relSelect.joinClause}`
+  }
+
+  const whereClause = buildWhere(state.filters, values, localAlias)
+  if (whereClause) text += ` WHERE ${whereClause}`
+
+  if (state.orderClauses.length > 0) {
+    const orders = state.orderClauses.map(
+      o => `${localAlias}.${quoteIdent(o.column)} ${o.ascending ? 'ASC' : 'DESC'}`
     )
     text += ` ORDER BY ${orders.join(', ')}`
   }
@@ -159,12 +213,12 @@ function buildUpsert(state: QueryState): BuiltQuery {
   return { text, values }
 }
 
-function buildWhere(filters: Filter[], values: unknown[]): string {
+function buildWhere(filters: Filter[], values: unknown[], qualifyAlias?: string): string {
   if (filters.length === 0) return ''
 
   const conditions = filters.map(filter => {
     const paramIndex = values.length + 1
-    const result = filterToSql(filter, paramIndex)
+    const result = filterToSql(filter, paramIndex, qualifyAlias)
     values.push(...result.values)
     return result.sql
   })

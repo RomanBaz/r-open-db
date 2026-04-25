@@ -177,6 +177,82 @@ const { data } = await db
 console.log(data[0].id) // auto-generated id
 ```
 
+### Relations
+
+Fetch related rows in a single query using Supabase-style relation syntax inside `select()`. The library reads your foreign keys via `information_schema` and emits a single SQL statement with `LEFT JOIN LATERAL` + `json_build_object` / `json_agg` — Postgres returns nested objects/arrays directly, so there's no client-side stitching.
+
+The schema is introspected lazily on the first relation query and cached for the lifetime of the client. Plain non-relation queries don't pay any cost.
+
+#### Many-to-one (nested object)
+
+When the local table holds the foreign key, the related row is returned as a nested object (or `null` if the FK is `NULL`):
+
+```ts
+const { data } = await db
+  .from('posts')
+  .select('id, title, author:users(id, name)')
+  .eq('published', true)
+
+// data: [
+//   { id: 1, title: 'Hello', author: { id: 7, name: 'Ada' } },
+//   { id: 2, title: 'World', author: null },
+// ]
+```
+
+Syntax: `alias:table(cols)` — `alias` becomes the property name on each row.
+
+#### One-to-many (nested array)
+
+When the FK lives on the related table pointing back at the local table, the related rows are returned as a nested array (or `[]` when none match):
+
+```ts
+const { data } = await db
+  .from('users')
+  .select('id, name, posts:posts(id, title)')
+
+// data: [
+//   { id: 7, name: 'Ada', posts: [ { id: 1, title: 'Hello' }, … ] },
+//   { id: 8, name: 'Bob', posts: [] },
+// ]
+```
+
+#### Star expansion
+
+Use `*` inside a relation to select every column of the related table:
+
+```ts
+db.from('posts').select('id, author:users(*)')
+// expands to all columns of users
+```
+
+#### Disambiguation: `!fkcol` hint
+
+If two tables are linked by more than one foreign key (e.g. `posts.author_id` *and* `posts.editor_id` both point at `users.id`), you must say which FK to follow:
+
+```ts
+db.from('posts').select('id, author:users!author_id(id, name)')
+db.from('posts').select('id, editor:users!editor_id(id, name)')
+```
+
+Without the `!fkcol` hint, the query returns `{ data: null, error: <Ambiguous relation…> }`.
+
+#### Errors
+
+Relation problems surface through the normal `{ data, error }` contract — they never throw. You'll see one of:
+
+- `No foreign key found between "<local>" and "<related>"`
+- `Ambiguous relation between "<local>" and "<related>" — multiple foreign keys exist (...). Use alias:table!<fk_column>(...) to disambiguate.`
+- `No foreign key on column "<fkcol>" between "<local>" and "<related>"`
+- `Composite foreign keys not supported in v1`
+- `Nested relation in '<segment>' not supported in v1`
+
+#### Limits (v1)
+
+- Filters / order / limit cannot be applied *inside* a relation segment — they apply only to the outer query.
+- Nested-of-nested (`a:b(c:d(...))`) is not supported.
+- Composite foreign keys are not supported.
+- Schema cache is connection-lifetime; there is no `refreshSchema()` yet.
+
 ### Schema Introspection
 
 Discover tables and foreign keys in your database:
