@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`r-open-db` is a TypeScript library that provides a Supabase-style chainable query API on top of any Postgres database, plus a SQL-file-based migration runner and CLI. It is published to npm as a library — there is no application here. The driver underneath is `postgres` (porsager/postgres).
+`r-open-db` is a TypeScript library that provides a Supabase-style chainable query API on top of any Postgres database, plus a SQL-file-based migration runner and CLI. It is intended for npm — there is no application here. The driver underneath is `postgres` (porsager/postgres).
+
+The library is **not yet published to the npm registry.** Consumers currently install it from GitHub (`"r-open-db": "github:RomanBaz/r-open-db"`). The `prepare` script in `package.json` runs `npm run build` if `dist/` is missing, which lets the GitHub install work cleanly. Switch consumers to `^0.x.y` once published.
 
 The full design intent lives in `docs/superpowers/specs/2026-04-14-r-open-db-design.md`. Read it before making non-trivial API decisions.
 
@@ -47,9 +49,16 @@ If that DB isn't reachable, those tests will fail — they do not mock the drive
 
 If a change reaches for string concatenation of SQL, it's wrong — re-route through the parameterizer.
 
-### Relations (currently disconnected)
+### Relations
 
-`src/relations.ts` introspects `information_schema` (foreign keys, columns), parses the Supabase-style `'id, author:users(id, name)'` select string with `parseSelectColumns()`, and builds the join SQL with `buildRelationSelect()`. The README and design spec advertise this feature, but `QueryBuilder.select()` does not currently call any of it — the relation code is reachable only via the low-level exports. Wiring it into `select()` is a known v1 blocker; do not assume it works just because the parser is tested.
+`src/relations.ts` introspects `information_schema` (foreign keys, columns), parses the Supabase-style `'id, author:users(id, name)'` select string with `parseSelectColumns()`, and builds the join SQL with `buildRelationSelect()`.
+
+`QueryBuilder.select()` checks for relation syntax via `hasRelationSyntax()` and routes through `buildRelationSelect` in `sql-builder.ts` when it sees one. Schema introspection is lazy (first relation query) and cached on the client.
+
+Limits in v1 (enforced — return errors, not silent corruption):
+- Composite foreign keys are unsupported
+- Nested relations (relation inside a relation) are unsupported
+- Ambiguous relations (multiple FKs between same pair of tables) require `alias:table!fk_column(...)` to disambiguate
 
 ### Migrations
 
