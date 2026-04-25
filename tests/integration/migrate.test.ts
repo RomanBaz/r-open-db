@@ -151,3 +151,115 @@ describe('migrate down', () => {
     expect(applied).toEqual(['001_create_comments', '002_create_tags'])
   })
 })
+
+describe('migrate safety', () => {
+  it('rolls back the transaction when a migration fails partway', async () => {
+    const failDir = await mkdtemp(join(tmpdir(), 'r-open-db-fail-'))
+    try {
+      await sql.unsafe('DROP TABLE IF EXISTS _r_open_db_migrations CASCADE')
+      await sql.unsafe('DROP TABLE IF EXISTS half_baked CASCADE')
+
+      // First statement creates a table; second statement is invalid SQL.
+      // If the migration is not transactional, `half_baked` will exist
+      // and/or the migration row will be recorded despite the failure.
+      await writeFile(
+        join(failDir, '001_broken.up.sql'),
+        `CREATE TABLE half_baked (id SERIAL PRIMARY KEY);
+         THIS IS NOT VALID SQL;`,
+      )
+      await writeFile(join(failDir, '001_broken.down.sql'), 'DROP TABLE IF EXISTS half_baked;')
+
+      await expect(
+        migrate({
+          connectionString: CONNECTION_STRING,
+          direction: 'up',
+          migrationsDir: failDir,
+        }),
+      ).rejects.toThrow()
+
+      const tableExists = await sql.unsafe(
+        `SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'half_baked'`,
+      )
+      expect(tableExists).toHaveLength(0)
+
+      await ensureMigrationsTable(sql)
+      const applied = await getAppliedMigrations(sql)
+      expect(applied).not.toContain('001_broken')
+    } finally {
+      await rm(failDir, { recursive: true })
+      await sql.unsafe('DROP TABLE IF EXISTS half_baked CASCADE')
+      await sql.unsafe('DROP TABLE IF EXISTS _r_open_db_migrations CASCADE')
+    }
+  })
+
+  it('throws a clean error when the down file is missing', async () => {
+    const noDownDir = await mkdtemp(join(tmpdir(), 'r-open-db-nodown-'))
+    try {
+      await sql.unsafe('DROP TABLE IF EXISTS _r_open_db_migrations CASCADE')
+      await sql.unsafe('DROP TABLE IF EXISTS lonely CASCADE')
+
+      await writeFile(
+        join(noDownDir, '001_lonely.up.sql'),
+        'CREATE TABLE lonely (id SERIAL PRIMARY KEY);',
+      )
+      // Intentionally no 001_lonely.down.sql
+
+      await migrate({
+        connectionString: CONNECTION_STRING,
+        direction: 'up',
+        migrationsDir: noDownDir,
+      })
+
+      await expect(
+        migrate({
+          connectionString: CONNECTION_STRING,
+          direction: 'down',
+          migrationsDir: noDownDir,
+        }),
+      ).rejects.toThrow(/Missing down migration file/)
+    } finally {
+      await rm(noDownDir, { recursive: true })
+      await sql.unsafe('DROP TABLE IF EXISTS lonely CASCADE')
+      await sql.unsafe('DROP TABLE IF EXISTS _r_open_db_migrations CASCADE')
+    }
+  })
+
+  it('serializes concurrent migrate runs via the advisory lock', async () => {
+    const concDir = await mkdtemp(join(tmpdir(), 'r-open-db-conc-'))
+    try {
+      await sql.unsafe('DROP TABLE IF EXISTS _r_open_db_migrations CASCADE')
+      await sql.unsafe('DROP TABLE IF EXISTS racy CASCADE')
+
+      await writeFile(
+        join(concDir, '001_racy.up.sql'),
+        'CREATE TABLE racy (id SERIAL PRIMARY KEY);',
+      )
+      await writeFile(join(concDir, '001_racy.down.sql'), 'DROP TABLE IF EXISTS racy;')
+
+      // Two runners launched at the same time. Without an advisory lock,
+      // both would see no applied migrations and both would try to CREATE,
+      // surfacing as a 'relation "racy" already exists' error from the loser.
+      const [a, b] = await Promise.all([
+        migrate({
+          connectionString: CONNECTION_STRING,
+          direction: 'up',
+          migrationsDir: concDir,
+        }),
+        migrate({
+          connectionString: CONNECTION_STRING,
+          direction: 'up',
+          migrationsDir: concDir,
+        }),
+      ])
+
+      // Exactly one runner should have applied the migration.
+      const applied = [...a, ...b]
+      expect(applied).toEqual(['001_racy'])
+    } finally {
+      await rm(concDir, { recursive: true })
+      await sql.unsafe('DROP TABLE IF EXISTS racy CASCADE')
+      await sql.unsafe('DROP TABLE IF EXISTS _r_open_db_migrations CASCADE')
+    }
+  })
+})
