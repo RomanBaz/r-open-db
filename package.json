@@ -27,7 +27,9 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build",
+    "prepare": "[ -f dist/index.js ] || npm run build"
   },
   "keywords": [
     "postgres",
